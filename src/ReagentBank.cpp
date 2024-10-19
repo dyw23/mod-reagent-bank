@@ -3,6 +3,8 @@
  */
 
 #include "ReagentBank.h"
+#include "Chat.h"
+#pragma execution_character_set("utf-8")
 
 // Add player scripts
 class npc_reagent_banker : public CreatureScript
@@ -89,16 +91,16 @@ private:
         }
     }
 
-    void UpdateItemCount(std::map<uint32, uint32> &entryToAmountMap, std::map<uint32, uint32> &entryToSubclassMap, Item* pItem, Player* player, uint32 bagSlot, uint32 itemSlot)
+    void UpdateItemCount(std::map<uint32, uint32>& entryToAmountMap, std::map<uint32, uint32>& entryToSubclassMap, Item* pItem, Player* player, uint32 bagSlot, uint32 itemSlot, std::map<std::string, uint32>& depositedItems)
     {
         uint32 count = pItem->GetCount();
-        ItemTemplate const *itemTemplate = pItem->GetTemplate();
-        
+        ItemTemplate const* itemTemplate = pItem->GetTemplate();
+
         if (!(itemTemplate->Class == ITEM_CLASS_TRADE_GOODS || itemTemplate->Class == ITEM_CLASS_GEM) || itemTemplate->GetMaxStackSize() == 1)
             return;
         uint32 itemEntry = itemTemplate->ItemId;
         uint32 itemSubclass = itemTemplate->SubClass;
-        
+
         // Put gems to ITEM_SUBCLASS_JEWELCRAFTING section
         if (itemTemplate->Class == ITEM_CLASS_GEM)
         {
@@ -115,8 +117,21 @@ private:
         {
             entryToAmountMap[itemEntry] = entryToAmountMap.find(itemEntry)->second + count;
         }
-        // The item counts have been updated, remove the original items from the player
-        player->DestroyItem(bagSlot, itemSlot, true);
+
+        // 向玩家发送有关存储物品的信息
+        if (!pItem)
+            return;
+        if (entryToAmountMap.find(itemEntry) != entryToAmountMap.end())
+        {
+            uint32 itemAmount = entryToAmountMap[itemEntry];
+            uint32 itemSubclass = entryToSubclassMap[itemEntry];
+
+            // 处理存放物品的逻辑 更新 depositedItems 变量
+            std::string itemName = itemTemplate->Name1;
+            depositedItems[itemName] += itemAmount;
+            // The item counts have been updated, remove the original items from the player
+            player->DestroyItem(bagSlot, itemSlot, true);
+        }
     }
 
     void DepositAllReagents(Player* player) {
@@ -135,12 +150,16 @@ private:
                     entryToSubclassMap[itemEntry] = itemSubclass;
                 } while (result->NextRow());
             }
+
+            // 定义变量存储每次存放的物品名称和数量
+            std::map<std::string, uint32_t> depositedItems;
+
             // Inventory Items
             for (uint8 i = INVENTORY_SLOT_ITEM_START; i < INVENTORY_SLOT_ITEM_END; ++i)
             {
                 if (Item* pItem = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i))
                 {
-                    UpdateItemCount(entryToAmountMap, entryToSubclassMap, pItem, player, INVENTORY_SLOT_BAG_0, i);
+                    UpdateItemCount(entryToAmountMap, entryToSubclassMap, pItem, player, INVENTORY_SLOT_BAG_0, i, depositedItems);
                 }
 
             }
@@ -153,7 +172,7 @@ private:
                 for (uint32 j = 0; j < bag->GetBagSize(); j++) {
                     if (Item * pItem = player->GetItemByPos(i, j))
                     {
-                        UpdateItemCount(entryToAmountMap, entryToSubclassMap, pItem, player, i, j);
+                        UpdateItemCount(entryToAmountMap, entryToSubclassMap, pItem, player, i, j, depositedItems);
                     }
                 }
             }
@@ -168,33 +187,53 @@ private:
                     trans->Append("REPLACE INTO custom_reagent_bank (character_id, item_entry, item_subclass, amount) VALUES ({}, {}, {}, {})", player->GetGUID().GetCounter(), itemEntry, itemSubclass, itemAmount);
                 }
                 CharacterDatabase.CommitTransaction(trans);
+			}
+			// 向玩家发送有关存储物品的信息
+			if (depositedItems.empty())
+            {
+                ChatHandler(player->GetSession()).PSendSysMessage("没有材料可以存放.");
             }
-        }));
-        ChatHandler(player->GetSession()).PSendSysMessage("All reagents deposited successfully.");
-        CloseGossipMenuFor(player);
-    }
+            else
+            {
+                std::stringstream ss;
+                for (const auto& entry : depositedItems)
+                {
+                    std::string itemName = entry.first;
+                    uint32 count = entry.second;
+                    ss << itemName << "  " << count << "\n";
+                }
+                std::string depositMessage = "存放以下物品：\n";
+                depositMessage += ss.str();  // 使用+=运算符追加内容
+                const char* cMessage =depositMessage.c_str();
+                ChatHandler(player->GetSession()).PSendSysMessage(cMessage);
+				ChatHandler(player->GetSession()).PSendSysMessage("所有材料存放成功.");
+                CloseGossipMenuFor(player);
+            }
+    }));
+}
 
 public:
     npc_reagent_banker() : CreatureScript("npc_reagent_banker") { }
 
     bool OnGossipHello(Player* player, Creature* creature) override
     {
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(4359, 30, 30, -18, 0) + "Parts", ITEM_SUBCLASS_PARTS, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(4358, 30, 30, -18, 0) + "Explosives", ITEM_SUBCLASS_EXPLOSIVES, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(4388, 30, 30, -18, 0) + "Devices", ITEM_SUBCLASS_DEVICES, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(1206, 30, 30, -18, 0) + "Jewelcrafting", ITEM_SUBCLASS_JEWELCRAFTING, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2589, 30, 30, -18, 0) + "Cloth", ITEM_SUBCLASS_CLOTH, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2318, 30, 30, -18, 0) + "Leather", ITEM_SUBCLASS_LEATHER, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2772, 30, 30, -18, 0) + "Metal & Stone", ITEM_SUBCLASS_METAL_STONE, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(12208, 30, 30, -18, 0) + "Meat", ITEM_SUBCLASS_MEAT, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2453, 30, 30, -18, 0) + "Herb", ITEM_SUBCLASS_HERB, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(7068, 30, 30, -18, 0) + "Elemental", ITEM_SUBCLASS_ELEMENTAL, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(10940, 30, 30, -18, 0) + "Enchanting", ITEM_SUBCLASS_ENCHANTING, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(23572, 30, 30, -18, 0) + "Nether Material", ITEM_SUBCLASS_MATERIAL, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2604, 30, 30, -18, 0) + "Other Trade Goods", ITEM_SUBCLASS_TRADE_GOODS_OTHER, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(38682, 30, 30, -18, 0) + "Armor Vellum", ITEM_SUBCLASS_ARMOR_ENCHANTMENT, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(39349, 30, 30, -18, 0) + "Weapon Vellum", ITEM_SUBCLASS_WEAPON_ENCHANTMENT, 0);
-        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, "Deposit All Reagents", DEPOSIT_ALL_REAGENTS, 0);
+        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, "存放所有材料", DEPOSIT_ALL_REAGENTS, 0);
+		AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2589, 30, 30, -18, 0) + "布料", ITEM_SUBCLASS_CLOTH, 0);
+		AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(12208, 30, 30, -18, 0) + "肉", ITEM_SUBCLASS_MEAT, 0);
+		AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2772, 30, 30, -18, 0) + "矿石", ITEM_SUBCLASS_METAL_STONE, 0);
+		AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(10940, 30, 30, -18, 0) + "附魔材料", ITEM_SUBCLASS_ENCHANTING, 0);
+		AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(7068, 30, 30, -18, 0) + "元素", ITEM_SUBCLASS_ELEMENTAL, 0);
+        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(4359, 30, 30, -18, 0) + "零件", ITEM_SUBCLASS_PARTS, 0);
+        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2604, 30, 30, -18, 0) + "其他可交易商品", ITEM_SUBCLASS_TRADE_GOODS_OTHER, 0);
+        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2453, 30, 30, -18, 0) + "草药", ITEM_SUBCLASS_HERB, 0);
+        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2318, 30, 30, -18, 0) + "皮革", ITEM_SUBCLASS_LEATHER, 0);
+        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(1206, 30, 30, -18, 0) + "珠宝", ITEM_SUBCLASS_JEWELCRAFTING, 0);
+        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(4358, 30, 30, -18, 0) + "爆炸物", ITEM_SUBCLASS_EXPLOSIVES, 0);
+        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(4388, 30, 30, -18, 0) + "装置", ITEM_SUBCLASS_DEVICES, 0);
+        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(23572, 30, 30, -18, 0) + "虚空材料", ITEM_SUBCLASS_MATERIAL, 0);
+        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(38682, 30, 30, -18, 0) + "护甲羊皮纸", ITEM_SUBCLASS_ARMOR_ENCHANTMENT, 0);
+        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(39349, 30, 30, -18, 0) + "武器羊皮纸", ITEM_SUBCLASS_WEAPON_ENCHANTMENT, 0);
+        //AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, "存放所有材料", DEPOSIT_ALL_REAGENTS, 0);
         SendGossipMenuFor(player, NPC_TEXT_ID, creature->GetGUID());
         return true;
     }
@@ -266,13 +305,13 @@ public:
             }
             if (gossipPageNumber > 0)
             {
-                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Previous Page", item_subclass, gossipPageNumber - 1);
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "上一页", item_subclass, gossipPageNumber - 1);
             }
             if (endValue < entryToAmountMap.size())
             {
-                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Next Page", item_subclass, gossipPageNumber + 1);
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "下一页", item_subclass, gossipPageNumber + 1);
             }
-            AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, "|TInterface/ICONS/Ability_Spy:30:30:-18:0|tBack...", MAIN_MENU, 0);
+            AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, "|TInterface/ICONS/Ability_Spy:30:30:-18:0|t返回...", MAIN_MENU, 0);
             SendGossipMenuFor(player, NPC_TEXT_ID, creature->GetGUID());
         }));
     }
